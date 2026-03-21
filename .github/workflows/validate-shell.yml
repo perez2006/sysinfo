@@ -1,0 +1,26 @@
+name: Validate Shell Scripts
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint scripts
+        run: shellcheck -s sh system-info.sh install-system-info.sh
+
+      - name: Validate POSIX syntax
+        run: |
+          dash -n system-info.sh
+          dash -n install-system-info.sh
