@@ -2,6 +2,8 @@
 
 `sysinfo` is a small POSIX `sh` script that prints a compact system summary for terminals and login shells.
 
+Current release: `v1.3.0`
+
 ## What It Shows
 
 - OS name and version
@@ -13,10 +15,11 @@
 - Local IP
 - Public IP with timeout and graceful fallback
 - Container / VM / bare-metal environment detection
+- Optional CPU, memory, and disk information
 
 ## Quick Install
 
-### Quick test
+### Quick test from `main`
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh
@@ -28,10 +31,22 @@ curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-syst
 curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool
 ```
 
+### Install a specific version or tag
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.3.0
+```
+
 ### Enable auto-start on login
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --auto-start
+```
+
+### Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --uninstall
 ```
 
 You can use `wget -qO-` instead of `curl -fsSL` if needed.
@@ -43,6 +58,7 @@ The installer supports:
 1. Quick test without installing anything
 2. Command installation as `sysinfo`
 3. Auto-start for interactive login shells
+4. Uninstall for command and auto-start hooks
 
 By default the installer prefers:
 
@@ -54,6 +70,7 @@ You can force the scope:
 ```sh
 sh install-system-info.sh --command-tool --user
 sh install-system-info.sh --auto-start --system
+sh install-system-info.sh --uninstall --user
 ```
 
 ## Usage
@@ -71,6 +88,8 @@ sysinfo --plain
 sysinfo --json
 sysinfo --no-public-ip
 sysinfo --timeout 1
+sysinfo --resources
+sysinfo --cpu --memory --disk
 ```
 
 ## Sample Output
@@ -88,12 +107,20 @@ Ubuntu 24.04 - Docker
   ⏳ Uptime:     2 days, 4 hours, 18 minutes
   📍 Local IP:   172.17.0.2
   🌍 Public IP:  203.0.113.1
+  🧠 CPU:        AMD EPYC 7B13
+  🧮 Memory:     1536 MB / 4096 MB
+  💽 Disk:       8.2G / 20G (42%)
 ```
+
+## PATH Note For User Installs
+
+When `sysinfo` is installed in `~/.local/bin`, the installer now prints an exact command you can run if that directory is not in your `PATH`.
 
 ## Requirements
 
 - POSIX-compatible `sh`
 - `curl` or `wget` for the installer and public IP lookup
+- Standard Unix tools such as `awk`, `df`, and `uname`
 - `sudo` or root only when installing system-wide
 
 ## Validation

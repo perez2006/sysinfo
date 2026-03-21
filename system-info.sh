@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 PROGRAM_NAME=${0##*/}
 
 COLOR_MODE="auto"
@@ -8,6 +8,10 @@ OUTPUT_MODE="pretty"
 SHOW_PUBLIC_IP=1
 REQUEST_TIMEOUT=2
 AUTO_MODE=0
+
+SHOW_CPU=0
+SHOW_MEMORY=0
+SHOW_DISK=0
 
 COLOR_HEADER=""
 COLOR_LABEL=""
@@ -28,6 +32,9 @@ TIMEZONE_VALUE=""
 UPTIME_VALUE=""
 LOCAL_IP=""
 PUBLIC_IP=""
+CPU_VALUE=""
+MEMORY_VALUE=""
+DISK_VALUE=""
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
@@ -60,6 +67,17 @@ plural_suffix() {
         printf '%s' ""
     else
         printf '%s' "s"
+    fi
+}
+
+append_json_field() {
+    key=$1
+    value=$2
+
+    if [ -n "$JSON_FIELDS" ]; then
+        JSON_FIELDS=$(printf '%s,\n  "%s": "%s"' "$JSON_FIELDS" "$key" "$(json_escape "$value")")
+    else
+        JSON_FIELDS=$(printf '  "%s": "%s"' "$key" "$(json_escape "$value")")
     fi
 }
 
@@ -119,8 +137,12 @@ show_help() {
         "  --auto              Suppress output when the current shell is not interactive" \
         "  --plain             Disable colors and icons" \
         "  --json              Print the collected data as JSON" \
-        "  --no-color          Disable ANSI colors" \
         "  --color             Force ANSI colors" \
+        "  --no-color          Disable ANSI colors" \
+        "  --cpu               Include CPU model" \
+        "  --memory            Include memory usage" \
+        "  --disk              Include root disk usage" \
+        "  --resources         Include CPU, memory, and disk" \
         "  --no-public-ip      Skip public IP discovery" \
         "  --timeout SECONDS   Network timeout for public IP lookup (default: 2)" \
         "  -h, --help          Show this help text" \
@@ -146,6 +168,20 @@ parse_args() {
                 ;;
             --color)
                 COLOR_MODE="always"
+                ;;
+            --cpu)
+                SHOW_CPU=1
+                ;;
+            --memory)
+                SHOW_MEMORY=1
+                ;;
+            --disk)
+                SHOW_DISK=1
+                ;;
+            --resources)
+                SHOW_CPU=1
+                SHOW_MEMORY=1
+                SHOW_DISK=1
                 ;;
             --no-public-ip)
                 SHOW_PUBLIC_IP=0
@@ -727,6 +763,82 @@ get_uptime() {
     printf '%s\n' "$parts"
 }
 
+get_cpu_info() {
+    cpu_value=""
+
+    if [ -f /proc/cpuinfo ]; then
+        cpu_value=$(normalize_line "$(awk -F: '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)")
+        [ -n "$cpu_value" ] && {
+            printf '%s\n' "$cpu_value"
+            return
+        }
+    fi
+
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command_exists sysctl; then
+        cpu_value=$(normalize_line "$(sysctl -n machdep.cpu.brand_string 2>/dev/null)")
+        [ -n "$cpu_value" ] && {
+            printf '%s\n' "$cpu_value"
+            return
+        }
+    fi
+
+    printf '%s\n' "unavailable"
+}
+
+get_memory_info() {
+    total_kb=""
+    available_kb=""
+    used_mb=0
+    total_mb=0
+
+    if [ -f /proc/meminfo ]; then
+        total_kb=$(awk '/MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+        available_kb=$(awk '/MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+        [ -z "$available_kb" ] && available_kb=$(awk '/MemFree:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+
+        case "$total_kb" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                case "$available_kb" in
+                    ''|*[!0-9]*)
+                        ;;
+                    *)
+                        total_mb=$((total_kb / 1024))
+                        used_mb=$(((total_kb - available_kb) / 1024))
+                        printf '%s\n' "$used_mb MB / $total_mb MB"
+                        return
+                        ;;
+                esac
+                ;;
+        esac
+    fi
+
+    if command_exists free; then
+        memory_line=$(free -m 2>/dev/null | awk '/^Mem:/ {print $3 " MB / " $2 " MB"; exit}')
+        [ -n "$memory_line" ] && {
+            printf '%s\n' "$memory_line"
+            return
+        }
+    fi
+
+    printf '%s\n' "unavailable"
+}
+
+get_disk_info() {
+    disk_line=""
+
+    if command_exists df; then
+        disk_line=$(df -h / 2>/dev/null | awk 'NR == 2 {print $3 " / " $2 " (" $5 ")"; exit}')
+        [ -n "$disk_line" ] && {
+            printf '%s\n' "$disk_line"
+            return
+        }
+    fi
+
+    printf '%s\n' "unavailable"
+}
+
 collect_system_info() {
     OS_NAME=$(get_os_name)
     OS_VERSION=$(get_os_version)
@@ -741,6 +853,16 @@ collect_system_info() {
     UPTIME_VALUE=$(get_uptime)
     LOCAL_IP=$(get_local_ip)
     PUBLIC_IP=$(get_public_ip)
+
+    if [ "$SHOW_CPU" -eq 1 ]; then
+        CPU_VALUE=$(get_cpu_info)
+    fi
+    if [ "$SHOW_MEMORY" -eq 1 ]; then
+        MEMORY_VALUE=$(get_memory_info)
+    fi
+    if [ "$SHOW_DISK" -eq 1 ]; then
+        DISK_VALUE=$(get_disk_info)
+    fi
 }
 
 json_escape() {
@@ -767,6 +889,9 @@ field_icon() {
         Uptime) printf '%s' "⏳" ;;
         Local\ IP) printf '%s' "📍" ;;
         Public\ IP) printf '%s' "🌍" ;;
+        CPU) printf '%s' "🧠" ;;
+        Memory) printf '%s' "🧮" ;;
+        Disk) printf '%s' "💽" ;;
         *) printf '%s' "•" ;;
     esac
 }
@@ -814,26 +939,48 @@ render_pretty() {
     print_field "Uptime" "$UPTIME_VALUE"
     print_field "Local IP" "$LOCAL_IP"
     print_field "Public IP" "$PUBLIC_IP"
+
+    if [ "$SHOW_CPU" -eq 1 ]; then
+        print_field "CPU" "$CPU_VALUE"
+    fi
+    if [ "$SHOW_MEMORY" -eq 1 ]; then
+        print_field "Memory" "$MEMORY_VALUE"
+    fi
+    if [ "$SHOW_DISK" -eq 1 ]; then
+        print_field "Disk" "$DISK_VALUE"
+    fi
+
     printf '\n'
 }
 
 render_json() {
-    printf '%s\n' \
-        "{" \
-        "  \"os_name\": \"$(json_escape "$OS_NAME")\"," \
-        "  \"os_version\": \"$(json_escape "$OS_VERSION")\"," \
-        "  \"kernel_version\": \"$(json_escape "$KERNEL_VERSION")\"," \
-        "  \"architecture\": \"$(json_escape "$ARCHITECTURE")\"," \
-        "  \"environment\": \"$(json_escape "$ENVIRONMENT_NAME")\"," \
-        "  \"hostname\": \"$(json_escape "$HOSTNAME_VALUE")\"," \
-        "  \"user\": \"$(json_escape "$USER_VALUE")\"," \
-        "  \"package_managers\": \"$(json_escape "$PACKAGE_MANAGERS")\"," \
-        "  \"init_system\": \"$(json_escape "$INIT_SYSTEM")\"," \
-        "  \"timezone\": \"$(json_escape "$TIMEZONE_VALUE")\"," \
-        "  \"uptime\": \"$(json_escape "$UPTIME_VALUE")\"," \
-        "  \"local_ip\": \"$(json_escape "$LOCAL_IP")\"," \
-        "  \"public_ip\": \"$(json_escape "$PUBLIC_IP")\"" \
-        "}"
+    JSON_FIELDS=""
+
+    append_json_field "os_name" "$OS_NAME"
+    append_json_field "os_version" "$OS_VERSION"
+    append_json_field "kernel_version" "$KERNEL_VERSION"
+    append_json_field "architecture" "$ARCHITECTURE"
+    append_json_field "environment" "$ENVIRONMENT_NAME"
+    append_json_field "hostname" "$HOSTNAME_VALUE"
+    append_json_field "user" "$USER_VALUE"
+    append_json_field "package_managers" "$PACKAGE_MANAGERS"
+    append_json_field "init_system" "$INIT_SYSTEM"
+    append_json_field "timezone" "$TIMEZONE_VALUE"
+    append_json_field "uptime" "$UPTIME_VALUE"
+    append_json_field "local_ip" "$LOCAL_IP"
+    append_json_field "public_ip" "$PUBLIC_IP"
+
+    if [ "$SHOW_CPU" -eq 1 ]; then
+        append_json_field "cpu" "$CPU_VALUE"
+    fi
+    if [ "$SHOW_MEMORY" -eq 1 ]; then
+        append_json_field "memory" "$MEMORY_VALUE"
+    fi
+    if [ "$SHOW_DISK" -eq 1 ]; then
+        append_json_field "disk" "$DISK_VALUE"
+    fi
+
+    printf '{\n%s\n}\n' "$JSON_FIELDS"
 }
 
 main() {

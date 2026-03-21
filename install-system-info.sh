@@ -1,23 +1,27 @@
 #!/bin/sh
 
+INSTALLER_VERSION="1.3.0"
 PROGRAM_NAME=${0##*/}
 
 REPO_OWNER="${SYSINFO_REPO_OWNER:-perez2006}"
 REPO_NAME="${SYSINFO_REPO_NAME:-sysinfo}"
-REPO_BRANCH="${SYSINFO_REPO_BRANCH:-main}"
-RAW_BASE_URL="${SYSINFO_RAW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$REPO_BRANCH}"
-SCRIPT_URL="$RAW_BASE_URL/system-info.sh"
+REPO_REF="${SYSINFO_REPO_REF:-${SYSINFO_REPO_BRANCH:-main}}"
+RAW_BASE_URL="${SYSINFO_RAW_BASE_URL:-}"
+SCRIPT_URL=""
 
 SYSTEM_BIN_PATH="/usr/local/bin/sysinfo"
 SYSTEM_PROFILE_PATH="/etc/profile.d/01-sysinfo.sh"
 USER_BIN_PATH="${HOME}/.local/bin/sysinfo"
 USER_PROFILE_PATH="${HOME}/.profile"
+AUTO_START_BEGIN="# >>> sysinfo auto-start >>>"
+AUTO_START_END="# <<< sysinfo auto-start <<<"
 
 MODE=""
 SCOPE="auto"
 TEMP_DIR=""
 INSTALLED_BIN_PATH=""
 INSTALLED_SCOPE=""
+USER_HOOK_REMOVED=0
 
 RED=$(printf '\033[0;31m')
 GREEN=$(printf '\033[0;32m')
@@ -29,6 +33,15 @@ NC=$(printf '\033[0m')
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+refresh_remote_urls() {
+    if [ -n "$RAW_BASE_URL" ]; then
+        SCRIPT_URL="$RAW_BASE_URL/system-info.sh"
+        return
+    fi
+
+    SCRIPT_URL="https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$REPO_REF/system-info.sh"
 }
 
 say() {
@@ -59,14 +72,17 @@ show_help() {
         "  --quick-test     Run the script once without installing it" \
         "  --command-tool   Install sysinfo as a command" \
         "  --auto-start     Install sysinfo and run it on login" \
+        "  --uninstall      Remove sysinfo and auto-start hooks" \
         "  --user           Force user-scope install (~/.local/bin)" \
         "  --system         Force system-scope install (/usr/local/bin)" \
+        "  --ref REF        Install from a specific branch or tag (default: main)" \
         "  -h, --help       Show this help text" \
+        "  -v, --version    Show the installer version" \
         "" \
         "Environment overrides:" \
         "  SYSINFO_REPO_OWNER" \
         "  SYSINFO_REPO_NAME" \
-        "  SYSINFO_REPO_BRANCH" \
+        "  SYSINFO_REPO_REF" \
         "  SYSINFO_RAW_BASE_URL"
 }
 
@@ -114,7 +130,7 @@ ensure_system_access() {
         return 0
     fi
 
-    show_error "System install requires root or sudo"
+    show_error "System operations require root or sudo"
     return 1
 }
 
@@ -183,31 +199,92 @@ write_system_profile_hook() {
 }
 
 write_user_profile_hook() {
-    marker_begin="# >>> sysinfo auto-start >>>"
-    marker_end="# <<< sysinfo auto-start <<<"
-
-    if [ -f "$USER_PROFILE_PATH" ] && grep -qF "$marker_begin" "$USER_PROFILE_PATH" 2>/dev/null; then
+    if [ -f "$USER_PROFILE_PATH" ] && grep -qF "$AUTO_START_BEGIN" "$USER_PROFILE_PATH" 2>/dev/null; then
         show_success "Auto-start already configured in $USER_PROFILE_PATH"
         return 0
     fi
 
     {
-        printf '\n%s\n' "$marker_begin"
+        printf '\n%s\n' "$AUTO_START_BEGIN"
         printf 'if [ -x "%s" ]; then\n' "$USER_BIN_PATH"
         printf '    SYSINFO_LOGIN_HOOK=1 "%s" --auto\n' "$USER_BIN_PATH"
-        printf 'fi\n'
-        printf '%s\n' "$marker_end"
+        printf '%s\n' "fi"
+        printf '%s\n' "$AUTO_START_END"
     } >> "$USER_PROFILE_PATH" || return 1
 }
 
-warn_about_user_path() {
-    case ":${PATH:-}:" in
-        *":$HOME/.local/bin:"*)
+remove_user_profile_hook() {
+    temp_profile="$TEMP_DIR/profile.filtered"
+    USER_HOOK_REMOVED=0
+
+    if [ ! -f "$USER_PROFILE_PATH" ]; then
+        return 0
+    fi
+
+    if ! grep -qF "$AUTO_START_BEGIN" "$USER_PROFILE_PATH" 2>/dev/null; then
+        return 0
+    fi
+
+    awk -v start="$AUTO_START_BEGIN" -v end="$AUTO_START_END" '
+        $0 == start { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip != 1 { print }
+    ' "$USER_PROFILE_PATH" > "$temp_profile" || return 1
+
+    mv "$temp_profile" "$USER_PROFILE_PATH" || return 1
+    USER_HOOK_REMOVED=1
+}
+
+remove_path() {
+    path_to_remove=$1
+    scope=$2
+
+    if [ ! -e "$path_to_remove" ]; then
+        return 0
+    fi
+
+    if [ "$scope" = "system" ]; then
+        ensure_system_access || return 1
+        run_privileged rm -f "$path_to_remove" || return 1
+        return 0
+    fi
+
+    rm -f "$path_to_remove" || return 1
+}
+
+path_profile_file() {
+    shell_name=${SHELL##*/}
+
+    case "$shell_name" in
+        zsh)
+            printf '%s\n' "$HOME/.zprofile"
+            ;;
+        bash)
+            if [ -f "$HOME/.bash_profile" ]; then
+                printf '%s\n' "$HOME/.bash_profile"
+            else
+                printf '%s\n' "$HOME/.profile"
+            fi
             ;;
         *)
-            show_warn "Add $HOME/.local/bin to PATH if 'sysinfo' is not found in new shells"
+            printf '%s\n' "$HOME/.profile"
             ;;
     esac
+}
+
+warn_about_user_path() {
+    profile_file=$(path_profile_file)
+
+    case ":${PATH:-}:" in
+        *":$HOME/.local/bin:"*)
+            return
+            ;;
+    esac
+
+    show_warn "Your PATH does not currently include $HOME/.local/bin"
+    show_info "Add it with:"
+    printf '  printf '\''\nexport PATH="$HOME/.local/bin:$PATH"\n'\'' >> "%s"\n' "$profile_file"
+    printf '  export PATH="$HOME/.local/bin:$PATH"\n'
 }
 
 download_script_to_temp() {
@@ -243,6 +320,7 @@ install_command_tool_with_scope() {
         INSTALLED_BIN_PATH=$target_path
         INSTALLED_SCOPE=$scope
         show_success "Installed sysinfo to $target_path"
+        show_info "Source ref: $REPO_REF"
         if [ "$scope" = "user" ]; then
             warn_about_user_path
         fi
@@ -279,6 +357,7 @@ ensure_command_tool() {
 install_quick_test() {
     temp_script=$(download_script_to_temp) || return 1
     show_info "Running sysinfo without installing"
+    show_info "Source ref: $REPO_REF"
     sh "$temp_script"
 }
 
@@ -306,6 +385,7 @@ install_auto_start() {
         if write_user_profile_hook; then
             show_success "Auto-start configured in $USER_PROFILE_PATH"
             show_info "Open a new login shell to see the banner automatically"
+            warn_about_user_path
         else
             show_error "Failed to update $USER_PROFILE_PATH"
             return 1
@@ -314,6 +394,69 @@ install_auto_start() {
 
     printf '\n'
     "$INSTALLED_BIN_PATH" --plain --auto 2>/dev/null || true
+}
+
+uninstall_scope() {
+    scope=$1
+    removed_any=0
+
+    case "$scope" in
+        system)
+            if [ -e "$SYSTEM_BIN_PATH" ]; then
+                remove_path "$SYSTEM_BIN_PATH" "system" || return 1
+                show_success "Removed $SYSTEM_BIN_PATH"
+                removed_any=1
+            fi
+            if [ -e "$SYSTEM_PROFILE_PATH" ]; then
+                remove_path "$SYSTEM_PROFILE_PATH" "system" || return 1
+                show_success "Removed $SYSTEM_PROFILE_PATH"
+                removed_any=1
+            fi
+            ;;
+        user)
+            if [ -e "$USER_BIN_PATH" ]; then
+                remove_path "$USER_BIN_PATH" "user" || return 1
+                show_success "Removed $USER_BIN_PATH"
+                removed_any=1
+            fi
+            if remove_user_profile_hook; then
+                if [ "$USER_HOOK_REMOVED" -eq 1 ]; then
+                    show_success "Removed sysinfo auto-start block from $USER_PROFILE_PATH"
+                    removed_any=1
+                fi
+            else
+                return 1
+            fi
+            ;;
+        *)
+            show_error "Unknown uninstall scope: $scope"
+            return 1
+            ;;
+    esac
+
+    if [ "$removed_any" -eq 0 ]; then
+        show_info "Nothing to remove for scope: $scope"
+    fi
+}
+
+uninstall_sysinfo() {
+    case "$SCOPE" in
+        auto)
+            uninstall_scope "user" || return 1
+            if [ "$(id -u)" -eq 0 ] || command_exists sudo; then
+                uninstall_scope "system" || return 1
+            else
+                show_info "Skipping system uninstall because sudo is not available"
+            fi
+            ;;
+        user|system)
+            uninstall_scope "$SCOPE" || return 1
+            ;;
+        *)
+            show_error "Unsupported scope: $SCOPE"
+            return 1
+            ;;
+    esac
 }
 
 show_menu() {
@@ -328,10 +471,12 @@ show_menu() {
     printf '%b[1]%b Quick Test    %b- run once without installing%b\n' "$WHITE" "$NC" "$GRAY" "$NC"
     printf '%b[2]%b Command Tool  %b- install as sysinfo%b\n' "$WHITE" "$NC" "$GRAY" "$NC"
     printf '%b[3]%b Auto-start    %b- show on interactive login%b\n' "$WHITE" "$NC" "$GRAY" "$NC"
+    printf '%b[4]%b Uninstall     %b- remove sysinfo and hooks%b\n' "$WHITE" "$NC" "$GRAY" "$NC"
     printf '\n'
     printf '%b[q]%b Quit\n' "$WHITE" "$NC"
     printf '\n'
     printf '%bScope:%b %s\n' "$CYAN" "$NC" "$(resolve_scope "$SCOPE" 2>/dev/null || printf '%s' "$SCOPE")"
+    printf '%bRef:%b   %s\n' "$CYAN" "$NC" "$REPO_REF"
     printf '\n'
     printf '%b>%b ' "$YELLOW" "$NC"
 }
@@ -352,6 +497,10 @@ run_interactive_menu() {
                 ;;
             3)
                 install_auto_start
+                break
+                ;;
+            4)
+                uninstall_sysinfo
                 break
                 ;;
             q|Q)
@@ -380,14 +529,32 @@ parse_args() {
             --auto-start)
                 MODE="auto-start"
                 ;;
+            --uninstall)
+                MODE="uninstall"
+                ;;
             --user)
                 SCOPE="user"
                 ;;
             --system)
                 SCOPE="system"
                 ;;
+            --ref)
+                shift
+                [ $# -gt 0 ] || {
+                    show_error "Missing value for --ref"
+                    exit 1
+                }
+                REPO_REF=$1
+                ;;
+            --ref=*)
+                REPO_REF=${1#*=}
+                ;;
             -h|--help)
                 show_help
+                exit 0
+                ;;
+            -v|--version)
+                printf '%s\n' "$INSTALLER_VERSION"
                 exit 0
                 ;;
             *)
@@ -403,6 +570,7 @@ parse_args() {
 main() {
     trap cleanup EXIT INT TERM
     parse_args "$@"
+    refresh_remote_urls
     make_temp_dir
 
     if [ -z "$MODE" ]; then
@@ -425,6 +593,9 @@ main() {
             ;;
         auto-start)
             install_auto_start
+            ;;
+        uninstall)
+            uninstall_sysinfo
             ;;
         *)
             show_error "Unsupported mode: $MODE"
