@@ -1,65 +1,101 @@
 # SysInfo
 
-A clean system information display tool for terminals with an interactive installer.
+`sysinfo` is a small POSIX `sh` script that prints a compact system summary for terminals and login shells.
 
-## Features
+## What It Shows
 
-- **System Overview**: OS, version, hostname, user details
-- **Environment Info**: Package manager, services, timezone
-- **Network Details**: Local and public IP addresses
-- **Container Detection**: Docker, LXC, systemd-nspawn support
-- **Multiple Install Options**: One-time test, command tool, or auto-start
+- OS name and version
+- Kernel and architecture
+- Hostname and current user
+- Package managers detected on the machine
+- Init/service manager
+- Timezone and uptime
+- Local IP
+- Public IP with timeout and graceful fallback
+- Container / VM / bare-metal environment detection
 
 ## Quick Install
 
-### Using curl
-```bash
-curl -sSL https://raw.githubusercontent.com/Bramba7/sysinfo/main/install-system-info.sh | sh
+### Quick test
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh
 ```
 
-### Using wget
-```bash
-wget -qO- https://raw.githubusercontent.com/Bramba7/sysinfo/main/install-system-info.sh | sh
+### Install as command
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool
 ```
 
-## Installation Options
+### Enable auto-start on login
 
-The interactive installer provides three options:
+```sh
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --auto-start
+```
 
-1. **Quick Test** - Run once without installation
-2. **Command Tool** - Install as `sysinfo` command
-3. **Auto-start** - Show system info on every login
+You can use `wget -qO-` instead of `curl -fsSL` if needed.
+
+## Installation Modes
+
+The installer supports:
+
+1. Quick test without installing anything
+2. Command installation as `sysinfo`
+3. Auto-start for interactive login shells
+
+By default the installer prefers:
+
+- System install in `/usr/local/bin` when root or `sudo` is available
+- User install in `~/.local/bin` when system install is not available
+
+You can force the scope:
+
+```sh
+sh install-system-info.sh --command-tool --user
+sh install-system-info.sh --auto-start --system
+```
 
 ## Usage
 
-After installing as command tool:
-```bash
+After installing:
+
+```sh
 sysinfo
+```
+
+Useful flags:
+
+```sh
+sysinfo --plain
+sysinfo --json
+sysinfo --no-public-ip
+sysinfo --timeout 1
 ```
 
 ## Sample Output
 
-```
-Ubuntu 22.04 - Docker
-    🖥️  Version: 22.04
-    🏠  Hostname: web-server
-    👤  User: ubuntu
-    📦  Package: apt ✓
-    📋  Services: systemctl ✓
-    ⏱️  Timezone: UTC
-    📍  Local IP: 172.17.0.2
-    🌍  Public IP: 203.0.113.1
+```text
+Ubuntu 24.04 - Docker
+  💻 Version:    24.04
+  🧩 Kernel:     6.8.0-31-generic
+  🏗️ Arch:       x86_64
+  🏠 Hostname:   api-01
+  👤 User:       ubuntu
+  📦 Packages:   apt, snap
+  📋 Services:   systemd
+  🕐 Timezone:   UTC
+  ⏳ Uptime:     2 days, 4 hours, 18 minutes
+  📍 Local IP:   172.17.0.2
+  🌍 Public IP:  203.0.113.1
 ```
 
 ## Requirements
 
-- POSIX-compatible shell
-- `curl` or `wget`
-- Root access for system-wide installation (options 2 & 3)
+- POSIX-compatible `sh`
+- `curl` or `wget` for the installer and public IP lookup
+- `sudo` or root only when installing system-wide
 
-## Compatibility
+## Validation
 
-- Linux distributions (Ubuntu, Debian, CentOS, Arch, Alpine, etc.)
-- Container environments (Docker, LXC, systemd-nspawn)
-- Cloud instances and VPS
-- Bare metal servers
+This repository includes a GitHub Actions workflow that runs syntax checks and `shellcheck` on every push and pull request.

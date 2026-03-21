@@ -1,490 +1,854 @@
 #!/bin/sh
-# More actions
-# Production System Information Display Script
-# Compatible with POSIX shell - works on minimal containers
 
-# Early exit for non-interactive shells (unless TERM is set for Docker compatibility)
-case "$-" in
-    *i*) ;;
-    *) [ -z "$TERM" ] && return ;;
-esac
+VERSION="1.2.0"
+PROGRAM_NAME=${0##*/}
 
-# Color definitions
-readonly YELLOW='\033[38;2;215;153;33m'
-readonly ORANGE='\033[38;2;214;93;14m'
-readonly BRIGHT_GREEN='\033[38;2;184;187;38m'
-readonly WHITE='\033[1;38;2;235;219;178m'
-readonly NC='\033[0m'
+COLOR_MODE="auto"
+OUTPUT_MODE="pretty"
+SHOW_PUBLIC_IP=1
+REQUEST_TIMEOUT=2
+AUTO_MODE=0
 
-# Utility function: Check if command exists and works
-cmd_exists() {
-    "$1" --version >/dev/null 2>&1
-}
+COLOR_HEADER=""
+COLOR_LABEL=""
+COLOR_VALUE=""
+COLOR_RESET=""
+UNICODE_MODE=0
 
-# Utility function: Check if command exists (simple check)
-cmd_available() {
+OS_NAME=""
+OS_VERSION=""
+KERNEL_VERSION=""
+ARCHITECTURE=""
+ENVIRONMENT_NAME=""
+HOSTNAME_VALUE=""
+USER_VALUE=""
+PACKAGE_MANAGERS=""
+INIT_SYSTEM=""
+TIMEZONE_VALUE=""
+UPTIME_VALUE=""
+LOCAL_IP=""
+PUBLIC_IP=""
+
+command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Utility function: Safe file read
-safe_read() {
-    [ -f "$1" ] && cat "$1" 2>/dev/null
+safe_cat() {
+    if [ -r "$1" ]; then
+        cat "$1" 2>/dev/null
+    fi
 }
 
-# Environment Detection (Containers + VMs)
-get_environment() {
-    # Container detection first (highest priority)
-    [ -f /.dockerenv ] && echo "Docker" && return
-    [ -n "${container}" ] && echo "systemd-nspawn" && return
+normalize_line() {
+    printf '%s' "$1" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
 
-    # LXC detection
-    if [ -f /proc/1/environ ] && grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
-        echo "LXC" && return
+probe_command() {
+    "$@" >/dev/null 2>&1
+}
+
+append_csv() {
+    if [ -n "$1" ]; then
+        printf '%s, %s' "$1" "$2"
+    else
+        printf '%s' "$2"
     fi
-    if [ -f /proc/1/cgroup ] && grep -q "/lxc/" /proc/1/cgroup 2>/dev/null; then
-        echo "LXC" && return
+}
+
+plural_suffix() {
+    if [ "$1" -eq 1 ]; then
+        printf '%s' ""
+    else
+        printf '%s' "s"
     fi
+}
 
-    # VM detection using systemd-detect-virt (most reliable)
-    if cmd_available systemd-detect-virt; then
-        local virt_type=$(systemd-detect-virt 2>/dev/null)
-        case "$virt_type" in
-            # Containers
-            lxc*) echo "LXC" && return ;;
-            docker) echo "Docker" && return ;;
-            systemd-nspawn) echo "systemd-nspawn" && return ;;
-            # VMs
-            kvm|qemu) echo "VM (KVM/QEMU)" && return ;;
-            vmware) echo "VM (VMware)" && return ;;
-            virtualbox) echo "VM (VirtualBox)" && return ;;
-            xen) echo "VM (Xen)" && return ;;
-            microsoft) echo "VM (Hyper-V)" && return ;;
-            oracle) echo "VM (VirtualBox)" && return ;;
-            *) [ "$virt_type" != "none" ] && echo "VM ($virt_type)" && return ;;
-        esac
-    fi
-
-    # Manual VM detection via DMI/SMBIOS
-    local dmi_vendor=$(safe_read /sys/class/dmi/id/sys_vendor)
-    local dmi_product=$(safe_read /sys/class/dmi/id/product_name)
-    local dmi_version=$(safe_read /sys/class/dmi/id/product_version)
-
-    # Check for common VM indicators
-    case "$dmi_vendor" in
-        *QEMU*) echo "VM (QEMU)" && return ;;
-        *VMware*) echo "VM (VMware)" && return ;;
-        *VirtualBox*) echo "VM (VirtualBox)" && return ;;
-        *Microsoft*) 
-            case "$dmi_product" in
-                *Virtual*) echo "VM (Hyper-V)" && return ;;
-            esac
+use_color() {
+    case "$COLOR_MODE" in
+        always) return 0 ;;
+        never) return 1 ;;
+        auto)
+            [ -t 1 ] || return 1
+            [ "${TERM:-}" != "dumb" ]
             ;;
-        *Xen*) echo "VM (Xen)" && return ;;
-        *innotek*) echo "VM (VirtualBox)" && return ;;
+        *)
+            return 1
+            ;;
     esac
-
-    case "$dmi_product" in
-        *KVM*) echo "VM (KVM)" && return ;;
-        *QEMU*) echo "VM (QEMU)" && return ;;
-        *VMware*) echo "VM (VMware)" && return ;;
-        *VirtualBox*) echo "VM (VirtualBox)" && return ;;
-        *Virtual*Machine*) echo "VM (Hyper-V)" && return ;;
-    esac
-
-    # Check CPU flags for hypervisor bit
-    if [ -f /proc/cpuinfo ] && grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null; then
-        echo "VM (Unknown)" && return
-    fi
-
-    # Check for virtualization-specific devices/modules
-    if [ -d /proc/xen ]; then
-        echo "VM (Xen)" && return
-    fi
-
-    # Check for VM-specific kernel modules
-    if [ -f /proc/modules ]; then
-        if grep -q "^vmw_" /proc/modules 2>/dev/null; then
-            echo "VM (VMware)" && return
-        fi
-        if grep -q "^vboxguest\|^vboxsf" /proc/modules 2>/dev/null; then
-            echo "VM (VirtualBox)" && return
-        fi
-    fi
-
-    # Final fallback - check BIOS date for VM indicators
-    local bios_date=$(safe_read /sys/class/dmi/id/bios_date)
-    case "$bios_date" in
-        *01/01/2011*|*04/01/2014*) echo "VM (QEMU)" && return ;;
-    esac
-
-    echo "Bare Metal"
 }
 
-# Hostname Detection
-get_hostname() {
-    # Try multiple methods in order of preference
-    hostname 2>/dev/null && return
-    safe_read /proc/sys/kernel/hostname && return
-    safe_read /etc/hostname && return
-    uname -n 2>/dev/null && return
-    echo "${HOSTNAME:-unknown}"
+use_unicode() {
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8*|*utf8*|*UTF8*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
-# Package Manager Detection
-get_pkg_mgr() {
-    local pkg_managers=""
-    local found_any=0
-    
-    # Test both existence AND functionality, collect all available
-    if command -v apt >/dev/null 2>&1 && apt --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}apt ✓, "
-        found_any=1
+configure_output() {
+    if use_color; then
+        COLOR_HEADER=$(printf '\033[1;38;5;230m')
+        COLOR_LABEL=$(printf '\033[38;5;179m')
+        COLOR_VALUE=$(printf '\033[1;38;5;114m')
+        COLOR_RESET=$(printf '\033[0m')
+    else
+        COLOR_HEADER=""
+        COLOR_LABEL=""
+        COLOR_VALUE=""
+        COLOR_RESET=""
     fi
-    if command -v nala >/dev/null 2>&1 && nala --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}nala ✓, "
-        found_any=1
+
+    if use_unicode && [ "$OUTPUT_MODE" = "pretty" ]; then
+        UNICODE_MODE=1
+    else
+        UNICODE_MODE=0
     fi
-    if command -v flatpak >/dev/null 2>&1 && flatpak --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}flatpak ✓, "
-        found_any=1
+}
+
+fail() {
+    printf '%s: %s\n' "$PROGRAM_NAME" "$1" >&2
+    exit 1
+}
+
+show_help() {
+    printf '%s\n' \
+        "Usage: $PROGRAM_NAME [options]" \
+        "" \
+        "Display a compact system summary for terminals and login shells." \
+        "" \
+        "Options:" \
+        "  --auto              Suppress output when the current shell is not interactive" \
+        "  --plain             Disable colors and icons" \
+        "  --json              Print the collected data as JSON" \
+        "  --no-color          Disable ANSI colors" \
+        "  --color             Force ANSI colors" \
+        "  --no-public-ip      Skip public IP discovery" \
+        "  --timeout SECONDS   Network timeout for public IP lookup (default: 2)" \
+        "  -h, --help          Show this help text" \
+        "  -v, --version       Show the script version"
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto)
+                AUTO_MODE=1
+                ;;
+            --plain)
+                OUTPUT_MODE="plain"
+                COLOR_MODE="never"
+                ;;
+            --json)
+                OUTPUT_MODE="json"
+                COLOR_MODE="never"
+                ;;
+            --no-color)
+                COLOR_MODE="never"
+                ;;
+            --color)
+                COLOR_MODE="always"
+                ;;
+            --no-public-ip)
+                SHOW_PUBLIC_IP=0
+                ;;
+            --timeout)
+                shift
+                [ $# -gt 0 ] || fail "missing value for --timeout"
+                REQUEST_TIMEOUT=$1
+                ;;
+            --timeout=*)
+                REQUEST_TIMEOUT=${1#*=}
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -v|--version)
+                printf '%s\n' "$VERSION"
+                exit 0
+                ;;
+            *)
+                fail "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+
+    case "$REQUEST_TIMEOUT" in
+        ''|*[!0-9]*)
+            fail "timeout must be an integer"
+            ;;
+    esac
+}
+
+should_render() {
+    if [ "$AUTO_MODE" -eq 1 ] || [ "${SYSINFO_LOGIN_HOOK:-0}" = "1" ]; then
+        case "$-" in
+            *i*) return 0 ;;
+        esac
+        [ -t 1 ] || return 1
     fi
-    if command -v snap >/dev/null 2>&1 && snap version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}snap ✓, "
-        found_any=1
+    return 0
+}
+
+http_get() {
+    if command_exists curl; then
+        curl -fsSL --connect-timeout "$REQUEST_TIMEOUT" --max-time "$REQUEST_TIMEOUT" "$1" 2>/dev/null
+        return $?
     fi
-    if command -v opkg >/dev/null 2>&1 && opkg --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}opkg ✓, "
-        found_any=1
+
+    if command_exists wget; then
+        wget -q -T "$REQUEST_TIMEOUT" -O- "$1" 2>/dev/null
+        return $?
     fi
-    if command -v brew >/dev/null 2>&1 && brew --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}brew ✓, "
-        found_any=1
-    fi
-    if command -v dnf >/dev/null 2>&1 && dnf --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}dnf ✓, "
-        found_any=1
-    fi
-    if command -v yum >/dev/null 2>&1 && yum --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}yum ✓, "
-        found_any=1
-    fi
-    if command -v zypper >/dev/null 2>&1 && zypper --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}zypper ✓, "
-        found_any=1
-    fi
-    if command -v pacman >/dev/null 2>&1 && pacman --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}pacman ✓, "
-        found_any=1
-    fi
-    if command -v apk >/dev/null 2>&1 && apk --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}apk ✓, "
-        found_any=1
-    fi
-    if command -v emerge >/dev/null 2>&1 && emerge --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}emerge ✓, "
-        found_any=1
-    fi
-    if command -v xbps-install >/dev/null 2>&1 && xbps-install --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}xbps ✓, "
-        found_any=1
-    fi
-    if command -v nix-env >/dev/null 2>&1 && nix-env --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}nix ✓, "
-        found_any=1
-    fi
-    if command -v eopkg >/dev/null 2>&1 && eopkg --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}eopkg ✓, "
-        found_any=1
-    fi
-    if command -v swupd >/dev/null 2>&1 && swupd --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}swupd ✓, "
-        found_any=1
-    fi
-    if command -v installpkg >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}installpkg ✓, "
-        found_any=1
-    fi
-    if command -v urpmi >/dev/null 2>&1 && urpmi --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}urpmi ✓, "
-        found_any=1
-    fi
-    if command -v pisi >/dev/null 2>&1 && pisi --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}pisi ✓, "
-        found_any=1
-    fi
-    if command -v cast >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}cast ✓, "
-        found_any=1
-    fi
-    if command -v prt-get >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}prt-get ✓, "
-        found_any=1
-    fi
-    if command -v Compile >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}Compile ✓, "
-        found_any=1
-    fi
-    if command -v tce-load >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}tce ✓, "
-        found_any=1
-    fi
-    if command -v petget >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}petget ✓, "
-        found_any=1
-    fi
-    if command -v guix >/dev/null 2>&1 && guix --version >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}guix ✓, "
-        found_any=1
-    fi
-    if command -v microdnf >/dev/null 2>&1 && microdnf --help >/dev/null 2>&1; then
-        pkg_managers="${pkg_managers}microdnf ✓, "
-        found_any=1
-    fi
-    
-    # If we found working package managers, return them (remove trailing comma and space)
-    if [ $found_any -eq 1 ]; then
-        echo "$pkg_managers" | sed 's/, $//'
+
+    return 1
+}
+
+is_ip_address() {
+    case "$1" in
+        ''|*[!0-9A-Fa-f:.]*)
+            return 1
+            ;;
+        *:*|*.*.*.*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+get_environment() {
+    virt_type=""
+    dmi_vendor=""
+    dmi_product=""
+    bios_vendor=""
+
+    [ -f /.dockerenv ] && {
+        printf '%s\n' "Docker"
+        return
+    }
+
+    case "${container:-}" in
+        lxc) printf '%s\n' "LXC"; return ;;
+        docker) printf '%s\n' "Docker"; return ;;
+        systemd-nspawn) printf '%s\n' "systemd-nspawn"; return ;;
+        '') ;;
+        *)
+            printf 'Container (%s)\n' "$container"
+            return
+            ;;
+    esac
+
+    if [ -f /proc/1/environ ] && grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
+        printf '%s\n' "LXC"
         return
     fi
-    
-    # Fallback: detect by distro but mark as broken since commands failed
-    if [ -f /etc/os-release ]; then
-        case "$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')" in
-            ubuntu|debian|mint|kali|pop|elementary|zorin|mx|deepin|parrot|tails|raspbian|devuan) echo "apt ✗" ;;
-            fedora|rhel|centos|rocky|alma|oracle|scientific|amazonlinux) echo "dnf ✗, yum ✗" ;;
-            opensuse*|sles|sled) echo "zypper ✗" ;;
-            arch|manjaro|endeavouros|artix|garuda|blackarch) echo "pacman ✗" ;;
-            alpine|postmarket) echo "apk ✗" ;;
-            gentoo|funtoo|calculate|sabayon) echo "emerge ✗" ;;
-            void) echo "xbps ✗" ;;
-            openwrt) echo "opkg ✗" ;;
-            nixos) echo "nix ✗" ;;
-            solus) echo "eopkg ✗" ;;
-            clear-linux-os) echo "swupd ✗" ;;
-            slackware) echo "installpkg ✗" ;;
-            mageia|openmandriva) echo "urpmi ✗" ;;
-            pardus) echo "pisi ✗" ;;
-            guix) echo "guix ✗" ;;
-            *) echo "unknown ✗" ;;
-        esac
-    else
-        echo "unknown ✗"
-    fi
-}
 
-# Init System Detection
-get_init_system() {
-    # Check systemd first (most common)
-    if cmd_exists systemctl; then
-        echo "systemctl ✓" && return
-    fi
-
-    # Darwin-specific init detection
-    if cmd_exists systemsetup; then
-        echo "systemsetup ✓" && return
-    fi
-
-    # Check for procd (OpenWrt)
-    if [ -d /etc/init.d ] && grep -q "procd" /sbin/init 2>/dev/null; then
-        echo "procd" && return
-    fi
-
-    # Check other init systems
-    if [ -f /sbin/openrc ] || cmd_available rc-service; then
-        echo "openrc" && return
-    fi
-
-    if cmd_available service; then
-        echo "service" && return
-    fi
-
-    # Check for runit
-    if [ -x /usr/bin/runsv ] ||[ -x /bin/runsv ] || [ -x /sbin/runsv ]; then
-        echo "runit" && return
-    fi
-
-    # Fallback based on PID 1
-    case "$(safe_read /proc/1/comm)" in
-        systemd) echo "systemctl ✗" ;;
-        *init) echo "sysvinit" ;;
-        *) echo "unknown" ;;
-    esac
-}
-
-# Timezone Detection
-get_timezone() {
-    safe_read /etc/timezone && return
-
-    # OpenWrt zonename from /etc/config/system
-    if [ -f /etc/config/system ]; then
-        zonename=$(grep "option zonename" /etc/config/system | awk -F"'" '{print $2}')
-        if [ -n "$zonename" ]; then
-            echo "$zonename"
+    if [ -f /proc/1/cgroup ]; then
+        if grep -q "/lxc/" /proc/1/cgroup 2>/dev/null; then
+            printf '%s\n' "LXC"
+            return
+        fi
+        if grep -q "docker" /proc/1/cgroup 2>/dev/null; then
+            printf '%s\n' "Docker"
             return
         fi
     fi
-    if [ -L /etc/localtime ]; then
-        readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' && return
+
+    if command_exists systemd-detect-virt; then
+        virt_type=$(normalize_line "$(systemd-detect-virt 2>/dev/null)")
+        case "$virt_type" in
+            ''|none) ;;
+            lxc) printf '%s\n' "LXC"; return ;;
+            docker) printf '%s\n' "Docker"; return ;;
+            systemd-nspawn) printf '%s\n' "systemd-nspawn"; return ;;
+            kvm|qemu) printf '%s\n' "VM (KVM/QEMU)"; return ;;
+            vmware) printf '%s\n' "VM (VMware)"; return ;;
+            virtualbox|oracle) printf '%s\n' "VM (VirtualBox)"; return ;;
+            xen) printf '%s\n' "VM (Xen)"; return ;;
+            microsoft) printf '%s\n' "VM (Hyper-V)"; return ;;
+            *)
+                printf 'VM (%s)\n' "$virt_type"
+                return
+                ;;
+        esac
     fi
 
-    if cmd_available timedatectl; then
-        timedatectl show --property=Timezone --value 2>/dev/null && return
+    dmi_vendor=$(safe_cat /sys/class/dmi/id/sys_vendor)
+    dmi_product=$(safe_cat /sys/class/dmi/id/product_name)
+    bios_vendor=$(safe_cat /sys/class/dmi/id/bios_vendor)
+
+    case "$dmi_vendor $dmi_product $bios_vendor" in
+        *QEMU*|*Bochs*)
+            printf '%s\n' "VM (QEMU)"
+            return
+            ;;
+        *VMware*)
+            printf '%s\n' "VM (VMware)"
+            return
+            ;;
+        *VirtualBox*|*innotek*)
+            printf '%s\n' "VM (VirtualBox)"
+            return
+            ;;
+        *Microsoft*Virtual*|*Hyper-V*)
+            printf '%s\n' "VM (Hyper-V)"
+            return
+            ;;
+        *Xen*)
+            printf '%s\n' "VM (Xen)"
+            return
+            ;;
+        *KVM*)
+            printf '%s\n' "VM (KVM)"
+            return
+            ;;
+    esac
+
+    if [ -f /proc/cpuinfo ] && grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null; then
+        printf '%s\n' "VM (Unknown)"
+        return
     fi
 
-    echo "${TZ:-UTC}"
+    if [ -d /proc/xen ]; then
+        printf '%s\n' "VM (Xen)"
+        return
+    fi
+
+    printf '%s\n' "Bare Metal"
 }
-# Local IP
-get_local_ip() {
-    local ip
 
-    # 1) Try hostname -I
-    if command -v hostname >/dev/null 2>&1; then
-        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-        if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ]; then
-            echo "$ip"
-            return 0
+get_hostname() {
+    if command_exists hostname; then
+        hostname 2>/dev/null && return
+    fi
+
+    safe_cat /proc/sys/kernel/hostname && return
+    safe_cat /etc/hostname && return
+
+    uname -n 2>/dev/null || printf '%s\n' "unknown"
+}
+
+get_pkg_mgr() {
+    pkg_list=""
+    os_id=""
+
+    if command_exists apt && probe_command apt --version; then
+        pkg_list=$(append_csv "$pkg_list" "apt")
+    fi
+    if command_exists nala && probe_command nala --version; then
+        pkg_list=$(append_csv "$pkg_list" "nala")
+    fi
+    if command_exists flatpak && probe_command flatpak --version; then
+        pkg_list=$(append_csv "$pkg_list" "flatpak")
+    fi
+    if command_exists snap && probe_command snap version; then
+        pkg_list=$(append_csv "$pkg_list" "snap")
+    fi
+    if command_exists opkg && probe_command opkg --version; then
+        pkg_list=$(append_csv "$pkg_list" "opkg")
+    fi
+    if command_exists brew && probe_command brew --version; then
+        pkg_list=$(append_csv "$pkg_list" "brew")
+    fi
+    if command_exists dnf && probe_command dnf --version; then
+        pkg_list=$(append_csv "$pkg_list" "dnf")
+    fi
+    if command_exists yum && probe_command yum --version; then
+        pkg_list=$(append_csv "$pkg_list" "yum")
+    fi
+    if command_exists zypper && probe_command zypper --version; then
+        pkg_list=$(append_csv "$pkg_list" "zypper")
+    fi
+    if command_exists pacman && probe_command pacman --version; then
+        pkg_list=$(append_csv "$pkg_list" "pacman")
+    fi
+    if command_exists apk && probe_command apk --version; then
+        pkg_list=$(append_csv "$pkg_list" "apk")
+    fi
+    if command_exists emerge && probe_command emerge --version; then
+        pkg_list=$(append_csv "$pkg_list" "emerge")
+    fi
+    if command_exists xbps-install && probe_command xbps-install --version; then
+        pkg_list=$(append_csv "$pkg_list" "xbps")
+    fi
+    if command_exists nix-env && probe_command nix-env --version; then
+        pkg_list=$(append_csv "$pkg_list" "nix")
+    fi
+    if command_exists eopkg && probe_command eopkg --version; then
+        pkg_list=$(append_csv "$pkg_list" "eopkg")
+    fi
+    if command_exists swupd && probe_command swupd --version; then
+        pkg_list=$(append_csv "$pkg_list" "swupd")
+    fi
+    if command_exists installpkg; then
+        pkg_list=$(append_csv "$pkg_list" "installpkg")
+    fi
+    if command_exists urpmi && probe_command urpmi --version; then
+        pkg_list=$(append_csv "$pkg_list" "urpmi")
+    fi
+    if command_exists guix && probe_command guix --version; then
+        pkg_list=$(append_csv "$pkg_list" "guix")
+    fi
+    if command_exists microdnf && probe_command microdnf --help; then
+        pkg_list=$(append_csv "$pkg_list" "microdnf")
+    fi
+
+    if [ -n "$pkg_list" ]; then
+        printf '%s\n' "$pkg_list"
+        return
+    fi
+
+    if [ -f /etc/os-release ]; then
+        os_id=$(normalize_line "$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+        case "$os_id" in
+            ubuntu|debian|linuxmint|mint|kali|pop|elementary|zorin|mx|deepin|parrot|tails|raspbian|devuan)
+                printf '%s\n' "apt (expected)"
+                ;;
+            fedora|rhel|centos|rocky|almalinux|alma|oracle|ol|scientific|amzn|amazonlinux)
+                printf '%s\n' "dnf/yum (expected)"
+                ;;
+            opensuse*|sles|sled)
+                printf '%s\n' "zypper (expected)"
+                ;;
+            arch|manjaro|endeavouros|artix|garuda|blackarch)
+                printf '%s\n' "pacman (expected)"
+                ;;
+            alpine|postmarketos)
+                printf '%s\n' "apk (expected)"
+                ;;
+            gentoo|funtoo|calculate|sabayon)
+                printf '%s\n' "emerge (expected)"
+                ;;
+            void)
+                printf '%s\n' "xbps (expected)"
+                ;;
+            openwrt)
+                printf '%s\n' "opkg (expected)"
+                ;;
+            nixos)
+                printf '%s\n' "nix (expected)"
+                ;;
+            solus)
+                printf '%s\n' "eopkg (expected)"
+                ;;
+            *)
+                printf '%s\n' "unknown"
+                ;;
+        esac
+        return
+    fi
+
+    printf '%s\n' "unknown"
+}
+
+get_init_system() {
+    pid1=""
+
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+        printf '%s\n' "launchd"
+        return
+    fi
+
+    if command_exists systemctl && probe_command systemctl --version; then
+        printf '%s\n' "systemd"
+        return
+    fi
+
+    if [ -x /sbin/openrc ] || command_exists rc-service; then
+        printf '%s\n' "openrc"
+        return
+    fi
+
+    if command_exists service; then
+        printf '%s\n' "service"
+        return
+    fi
+
+    if [ -x /usr/bin/runsv ] || [ -x /bin/runsv ] || [ -x /sbin/runsv ]; then
+        printf '%s\n' "runit"
+        return
+    fi
+
+    pid1=$(safe_cat /proc/1/comm)
+    case "$pid1" in
+        systemd) printf '%s\n' "systemd" ;;
+        *init) printf '%s\n' "sysvinit" ;;
+        '') printf '%s\n' "unknown" ;;
+        *) printf '%s\n' "$pid1" ;;
+    esac
+}
+
+get_timezone() {
+    timezone_value=""
+
+    timezone_value=$(normalize_line "$(safe_cat /etc/timezone)")
+    if [ -n "$timezone_value" ]; then
+        printf '%s\n' "$timezone_value"
+        return
+    fi
+
+    if [ -f /etc/config/system ]; then
+        timezone_value=$(normalize_line "$(grep "option zonename" /etc/config/system 2>/dev/null | awk -F"'" '{print $2}')")
+        if [ -n "$timezone_value" ]; then
+            printf '%s\n' "$timezone_value"
+            return
         fi
     fi
 
-    # 2) Try ip (iproute2)
-    if command -v ip >/dev/null 2>&1; then
-        ip=$(ip -4 addr show scope global \
-            | awk '/inet / && $2 !~ /^127\./ {split($2,a,"/"); print a[1]; exit}')
-        if [ -n "$ip" ]; then
-            echo "$ip"
-            return 0
+    if [ -L /etc/localtime ]; then
+        timezone_value=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+        timezone_value=$(normalize_line "$timezone_value")
+        if [ -n "$timezone_value" ]; then
+            printf '%s\n' "$timezone_value"
+            return
         fi
-    fi    
-    # 3) Try ifconfig
-    if command -v ifconfig >/dev/null 2>&1; then
-        local iface interfaces status
-        interfaces=$(ifconfig -a 2>/dev/null | awk -F: '/^[[:alnum:]]/ {print $1}')
+    fi
 
-        for iface in $interfaces; do
-            [ "$iface" = "lo" ] && continue
+    if command_exists timedatectl; then
+        timezone_value=$(normalize_line "$(timedatectl show --property=Timezone --value 2>/dev/null)")
+        if [ -n "$timezone_value" ]; then
+            printf '%s\n' "$timezone_value"
+            return
+        fi
+    fi
 
-            status=$(ifconfig "$iface" 2>/dev/null | awk '/status:/ {print $2}')
-            if [ -n "$status" ] && [ "$status" != "active" ] && [ "$status" != "up" ]; then
-                continue
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command_exists systemsetup; then
+        timezone_value=$(normalize_line "$(systemsetup -gettimezone 2>/dev/null | sed 's/^Time Zone: //')")
+        if [ -n "$timezone_value" ]; then
+            printf '%s\n' "$timezone_value"
+            return
+        fi
+    fi
+
+    timezone_value=$(normalize_line "$(date +%Z 2>/dev/null)")
+    if [ -n "$timezone_value" ]; then
+        printf '%s\n' "$timezone_value"
+        return
+    fi
+
+    printf '%s\n' "${TZ:-UTC}"
+}
+
+get_local_ip() {
+    ip_value=""
+    route_iface=""
+    interfaces=""
+    iface=""
+
+    if command_exists hostname; then
+        ip_value=$(normalize_line "$(hostname -I 2>/dev/null | awk '{print $1}')")
+        case "$ip_value" in
+            ''|127.*) ;;
+            *)
+                printf '%s\n' "$ip_value"
+                return
+                ;;
+        esac
+    fi
+
+    if command_exists ip; then
+        ip_value=$(normalize_line "$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')")
+        if [ -n "$ip_value" ]; then
+            printf '%s\n' "$ip_value"
+            return
+        fi
+
+        ip_value=$(normalize_line "$(ip -4 addr show scope global 2>/dev/null | awk '/inet / {split($2, a, "/"); print a[1]; exit}')")
+        if [ -n "$ip_value" ]; then
+            printf '%s\n' "$ip_value"
+            return
+        fi
+    fi
+
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command_exists route && command_exists ipconfig; then
+        route_iface=$(normalize_line "$(route get default 2>/dev/null | awk '/interface:/ {print $2; exit}')")
+        if [ -n "$route_iface" ]; then
+            ip_value=$(normalize_line "$(ipconfig getifaddr "$route_iface" 2>/dev/null)")
+            if [ -n "$ip_value" ]; then
+                printf '%s\n' "$ip_value"
+                return
             fi
+        fi
+    fi
 
-            ip=$(ifconfig "$iface" 2>/dev/null \
-                | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
+    if command_exists ifconfig; then
+        interfaces=$(ifconfig -a 2>/dev/null | awk -F: '/^[[:alnum:]_.-]+:/ {print $1}')
+        for iface in $interfaces; do
+            case "$iface" in
+                lo|lo0) continue ;;
+            esac
 
-            if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ]; then
-                echo "$ip"
-                return 0
+            ip_value=$(normalize_line "$(ifconfig "$iface" 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')")
+            if [ -n "$ip_value" ]; then
+                printf '%s\n' "$ip_value"
+                return
             fi
         done
     fi
 
-    # 4) Fallback: parse /proc/net/fib_trie without awk
-    if [ -r /proc/net/fib_trie ]; then
-        prev=""
-        while IFS= read -r line; do
-            case "$line" in
-                *"/32 host LOCAL"*)
-                    # Extract IP from previous line using shell builtins
-                    set -- $prev
-                    for word in "$@"; do
-                        case $word in
-                            127.*) ;;  # skip loopback
-                            ?*.*.*.*)
-                                ip="$word"
-                                echo "$ip"
-                                return 0
-                                ;;
-                        esac
-                    done
-                    ;;
-            esac
-            prev="$line"
-        done < /proc/net/fib_trie
+    printf '%s\n' "unavailable"
+}
+
+get_public_ip() {
+    ip_value=""
+    service_url=""
+
+    if [ "$SHOW_PUBLIC_IP" -ne 1 ]; then
+        printf '%s\n' "disabled"
+        return
     fi
 
+    if ! command_exists curl && ! command_exists wget; then
+        printf '%s\n' "curl/wget needed"
+        return
+    fi
 
-    # 5) Give up
-    echo "* Install 'iproute2' (ip), 'net-tools' (ifconfig)"
-    return 1
+    for service_url in \
+        "https://api.ipify.org" \
+        "https://ifconfig.io/ip" \
+        "https://ipinfo.io/ip"
+    do
+        ip_value=$(normalize_line "$(http_get "$service_url")")
+        if is_ip_address "$ip_value"; then
+            printf '%s\n' "$ip_value"
+            return
+        fi
+    done
+
+    printf '%s\n' "network unavailable"
 }
 
-
-# Public IP Detection
-get_public_ip() {
-   # Check for curl or wget
-   if command -v curl >/dev/null; then
-       local ip=$(timeout 2 curl -s https://ipinfo.io/ip 2>/dev/null ||
-                  timeout 2 curl -s https://ifconfig.io 2>/dev/null ||
-                  timeout 2 curl -s https://api.ipify.org 2>/dev/null)
-   elif command -v wget >/dev/null; then
-       local ip=$(timeout 2 wget -qO- https://ipinfo.io/ip 2>/dev/null ||
-                  timeout 2 wget -qO- https://ifconfig.io 2>/dev/null ||
-                  timeout 2 wget -qO- https://api.ipify.org 2>/dev/null)
-   else
-       echo "curl/wget needed" && return
-   fi
-   
-   # Use POSIX-compatible regex test
-   case "$ip" in
-       *[!0-9.]*) echo "network unavailable" ;;
-       *.*.*.*)
-           echo "$ip" | grep -q '^[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}$' && echo "$ip" || echo "network unavailable"
-           ;;
-       *) echo "network unavailable" ;;
-   esac
-}
-
-# OS Information
 get_os_name() {
     if [ -f /etc/os-release ]; then
-        grep '^NAME=' /etc/os-release | cut -d= -f2 | tr -d '"'
-    elif command -v busybox >/dev/null 2>&1; then
-        echo "BusyBox"
-    elif command -v apk >/dev/null 2>&1; then
-        echo "Alpine Linux"
-    elif command -v dpkg >/dev/null 2>&1; then
-        echo "Debian-based"
-    elif command -v rpm >/dev/null 2>&1; then
-        echo "RPM-based"
-    else
-        # Fallback
-        uname -s 2>/dev/null || echo "Unknown"
+        normalize_line "$(grep '^NAME=' /etc/os-release | cut -d= -f2 | tr -d '"')"
+        return
     fi
-}
-get_user(){
-    if [ -z "$USER" ]; then
-        echo "root"
-    else
-        echo "$USER"
+
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command_exists sw_vers; then
+        normalize_line "$(sw_vers -productName 2>/dev/null)"
+        return
     fi
+
+    if command_exists busybox; then
+        printf '%s\n' "BusyBox"
+        return
+    fi
+
+    uname -s 2>/dev/null || printf '%s\n' "Unknown"
 }
+
 get_os_version() {
+    version_id=""
+    pretty_name=""
+
     if [ -f /etc/os-release ]; then
-        # Standard distros
-        grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"'
-    elif command -v busybox >/dev/null 2>&1; then
-        # BusyBox version
-        busybox | head -n1 | awk '{print $2}'   # prints version like v1.36.1
+        version_id=$(normalize_line "$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+        if [ -n "$version_id" ]; then
+            printf '%s\n' "$version_id"
+            return
+        fi
+
+        pretty_name=$(normalize_line "$(grep '^VERSION=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+        if [ -n "$pretty_name" ]; then
+            printf '%s\n' "$pretty_name"
+            return
+        fi
+    fi
+
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command_exists sw_vers; then
+        normalize_line "$(sw_vers -productVersion 2>/dev/null)"
+        return
+    fi
+
+    uname -r 2>/dev/null || printf '%s\n' "Unknown"
+}
+
+get_kernel_version() {
+    uname -r 2>/dev/null || printf '%s\n' "Unknown"
+}
+
+get_architecture() {
+    uname -m 2>/dev/null || printf '%s\n' "Unknown"
+}
+
+get_user_name() {
+    if [ -n "${USER:-}" ]; then
+        printf '%s\n' "$USER"
+        return
+    fi
+
+    if command_exists id; then
+        id -un 2>/dev/null && return
+    fi
+
+    printf '%s\n' "unknown"
+}
+
+get_uptime() {
+    uptime_seconds=""
+    days=0
+    hours=0
+    minutes=0
+    parts=""
+
+    if [ -r /proc/uptime ]; then
+        uptime_seconds=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+    elif command_exists uptime; then
+        uptime_value=$(uptime 2>/dev/null | awk -F'up ' 'NF > 1 {print $2}' | awk -F',' '{print $1}')
+        if [ -n "$uptime_value" ]; then
+            normalize_line "$uptime_value"
+            return
+        fi
+    fi
+
+    case "$uptime_seconds" in
+        ''|*[!0-9]*)
+            printf '%s\n' "unknown"
+            return
+            ;;
+    esac
+
+    days=$((uptime_seconds / 86400))
+    hours=$(((uptime_seconds % 86400) / 3600))
+    minutes=$(((uptime_seconds % 3600) / 60))
+
+    if [ "$days" -gt 0 ]; then
+        parts=$(append_csv "$parts" "$days day$(plural_suffix "$days")")
+    fi
+    if [ "$hours" -gt 0 ]; then
+        parts=$(append_csv "$parts" "$hours hour$(plural_suffix "$hours")")
+    fi
+    if [ "$minutes" -gt 0 ] || [ -z "$parts" ]; then
+        parts=$(append_csv "$parts" "$minutes minute$(plural_suffix "$minutes")")
+    fi
+
+    printf '%s\n' "$parts"
+}
+
+collect_system_info() {
+    OS_NAME=$(get_os_name)
+    OS_VERSION=$(get_os_version)
+    KERNEL_VERSION=$(get_kernel_version)
+    ARCHITECTURE=$(get_architecture)
+    ENVIRONMENT_NAME=$(get_environment)
+    HOSTNAME_VALUE=$(get_hostname)
+    USER_VALUE=$(get_user_name)
+    PACKAGE_MANAGERS=$(get_pkg_mgr)
+    INIT_SYSTEM=$(get_init_system)
+    TIMEZONE_VALUE=$(get_timezone)
+    UPTIME_VALUE=$(get_uptime)
+    LOCAL_IP=$(get_local_ip)
+    PUBLIC_IP=$(get_public_ip)
+}
+
+json_escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+field_icon() {
+    label=$1
+
+    if [ "$UNICODE_MODE" -ne 1 ]; then
+        printf '%s' "-"
+        return
+    fi
+
+    case "$label" in
+        Version) printf '%s' "💻" ;;
+        Kernel) printf '%s' "🧩" ;;
+        Arch) printf '%s' "🏗️" ;;
+        Hostname) printf '%s' "🏠" ;;
+        User) printf '%s' "👤" ;;
+        Packages) printf '%s' "📦" ;;
+        Services) printf '%s' "📋" ;;
+        Timezone) printf '%s' "🕐" ;;
+        Uptime) printf '%s' "⏳" ;;
+        Local\ IP) printf '%s' "📍" ;;
+        Public\ IP) printf '%s' "🌍" ;;
+        *) printf '%s' "•" ;;
+    esac
+}
+
+print_field() {
+    label=$1
+    value=$2
+    icon=$(field_icon "$label")
+
+    if [ "$OUTPUT_MODE" = "plain" ]; then
+        printf '  %-10s %s\n' "$label:" "$value"
+        return
+    fi
+
+    printf '  %b%s%b %-10s %b%s%b\n' \
+        "$COLOR_LABEL" "$icon" "$COLOR_RESET" \
+        "$label:" \
+        "$COLOR_VALUE" "$value" "$COLOR_RESET"
+}
+
+render_pretty() {
+    header="$OS_NAME"
+
+    if [ -n "$OS_VERSION" ]; then
+        header="$header $OS_VERSION"
+    fi
+    if [ -n "$ENVIRONMENT_NAME" ]; then
+        header="$header - $ENVIRONMENT_NAME"
+    fi
+
+    if [ "$OUTPUT_MODE" = "plain" ]; then
+        printf '%s\n' "$header"
     else
-        # fallback to kernel version
-        uname -r 2>/dev/null || echo "Unknown"
+        printf '\n%b%s%b\n' "$COLOR_HEADER" "$header" "$COLOR_RESET"
+    fi
+
+    print_field "Version" "$OS_VERSION"
+    print_field "Kernel" "$KERNEL_VERSION"
+    print_field "Arch" "$ARCHITECTURE"
+    print_field "Hostname" "$HOSTNAME_VALUE"
+    print_field "User" "$USER_VALUE"
+    print_field "Packages" "$PACKAGE_MANAGERS"
+    print_field "Services" "$INIT_SYSTEM"
+    print_field "Timezone" "$TIMEZONE_VALUE"
+    print_field "Uptime" "$UPTIME_VALUE"
+    print_field "Local IP" "$LOCAL_IP"
+    print_field "Public IP" "$PUBLIC_IP"
+    printf '\n'
+}
+
+render_json() {
+    printf '%s\n' \
+        "{" \
+        "  \"os_name\": \"$(json_escape "$OS_NAME")\"," \
+        "  \"os_version\": \"$(json_escape "$OS_VERSION")\"," \
+        "  \"kernel_version\": \"$(json_escape "$KERNEL_VERSION")\"," \
+        "  \"architecture\": \"$(json_escape "$ARCHITECTURE")\"," \
+        "  \"environment\": \"$(json_escape "$ENVIRONMENT_NAME")\"," \
+        "  \"hostname\": \"$(json_escape "$HOSTNAME_VALUE")\"," \
+        "  \"user\": \"$(json_escape "$USER_VALUE")\"," \
+        "  \"package_managers\": \"$(json_escape "$PACKAGE_MANAGERS")\"," \
+        "  \"init_system\": \"$(json_escape "$INIT_SYSTEM")\"," \
+        "  \"timezone\": \"$(json_escape "$TIMEZONE_VALUE")\"," \
+        "  \"uptime\": \"$(json_escape "$UPTIME_VALUE")\"," \
+        "  \"local_ip\": \"$(json_escape "$LOCAL_IP")\"," \
+        "  \"public_ip\": \"$(json_escape "$PUBLIC_IP")\"" \
+        "}"
+}
+
+main() {
+    parse_args "$@"
+
+    should_render || exit 0
+
+    configure_output
+    collect_system_info
+
+    if [ "$OUTPUT_MODE" = "json" ]; then
+        render_json
+    else
+        render_pretty
     fi
 }
 
-# Main Display Function
-display_system_info() {
-    printf "\n"
-    printf "${WHITE}%s - %s${NC}\n" "$(get_os_name)" "$(get_environment)"
-    printf "    ${YELLOW}💻${NC}\t${ORANGE}Version:${NC}   ${BRIGHT_GREEN}%s${NC}\n" "$(get_os_version)"
-    printf "    ${YELLOW}🏠${NC}\t${ORANGE}Hostname:${NC}  ${BRIGHT_GREEN}%s${NC}\n" "$(get_hostname)"
-    printf "    ${YELLOW}👤${NC}\t${ORANGE}User:${NC}      ${BRIGHT_GREEN}%s${NC}\n" "$(get_user)"
-    printf "    ${YELLOW}📦${NC}\t${ORANGE}Package:${NC}   ${BRIGHT_GREEN}%s${NC}\n" "$(get_pkg_mgr)"
-    printf "    ${YELLOW}📋${NC}\t${ORANGE}Services:${NC}  ${BRIGHT_GREEN}%s${NC}\n" "$(get_init_system)"
-    printf "    ${YELLOW}🕐${NC}\t${ORANGE}Timezone:${NC}  ${BRIGHT_GREEN}%s${NC}\n" "$(get_timezone)"
-    printf "    ${YELLOW}📍${NC}\t${ORANGE}Local IP:${NC}  ${BRIGHT_GREEN}%s${NC}\n" "$(get_local_ip)"
-    printf "    ${YELLOW}🌍${NC}\t${ORANGE}Public IP:${NC} ${BRIGHT_GREEN}%s${NC}\n" "$(get_public_ip)"
-    printf "\n"
-}
-
-# Execute main function
-display_system_info
+main "$@"
