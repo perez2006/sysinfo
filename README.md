@@ -2,7 +2,7 @@
 
 `sysinfo` is a small POSIX `sh` script that prints a compact system summary for terminals and login shells.
 
-Current release: `v1.4.0`
+Current release: `v1.5.0`
 
 ## What It Shows
 
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-syst
 ### Install a specific version or tag
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.4.0
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.5.0
 ```
 
 ### Enable auto-start on login
@@ -125,9 +125,17 @@ When `sysinfo` is installed in `~/.local/bin`, the installer now prints an exact
 
 ## Validation
 
-This repository includes a GitHub Actions workflow that runs syntax checks, `shellcheck`, and the scripts in `tests/` on every push and pull request.
+This repository includes a GitHub Actions workflow that runs syntax checks, `shellcheck`, JSON validation with `jq`, and the scripts in `tests/` on every push and pull request. The workflow validates Ubuntu, Debian, Alpine, and macOS.
 
 ## Release Notes
+
+### v1.5.0
+
+- Adds deterministic fixture tests for OS, kernel, architecture, hostname, user, package manager, init system, timezone, uptime, local IP, CPU, memory, and disk output.
+- Adds test-only filesystem overrides through `SYSINFO_PROC_DIR`, `SYSINFO_ETC_DIR`, `SYSINFO_DMI_DIR`, and `SYSINFO_DOCKER_ENV_FILE`.
+- Validates JSON output with `jq` when available.
+- Expands CI coverage across Ubuntu, Debian, Alpine, and macOS.
+- Centralizes POSIX syntax and smoke tests in `tests/run-posix-suite.sh`.
 
 ### v1.4.0
 

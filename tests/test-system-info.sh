@@ -30,7 +30,7 @@ assert_contains() {
 trap cleanup EXIT HUP INT TERM
 
 version=$(sh "$SCRIPT" --version) || fail "version command failed"
-[ "$version" = "1.4.0" ] || fail "unexpected version: $version"
+[ "$version" = "1.5.0" ] || fail "unexpected version: $version"
 
 plain_output=$(sh "$SCRIPT" --plain --no-public-ip --resources) || fail "plain output failed"
 assert_contains "$plain_output" "Public IP: disabled"
@@ -43,6 +43,10 @@ assert_contains "$json_output" '"public_ip": "disabled"'
 assert_contains "$json_output" '"kernel_version":'
 assert_contains "$json_output" '"memory":'
 assert_contains "$json_output" '"disk":'
+
+if command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "$json_output" | jq -e '.public_ip == "disabled" and (.kernel_version | length > 0)' >/dev/null || fail "json validation failed"
+fi
 
 out_file=$(mktemp "${TMPDIR:-/tmp}/sysinfo-test-out.XXXXXX") || fail "unable to create output temp file"
 err_file=$(mktemp "${TMPDIR:-/tmp}/sysinfo-test-err.XXXXXX") || fail "unable to create error temp file"

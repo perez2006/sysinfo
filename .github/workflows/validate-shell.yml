@@ -5,29 +5,47 @@ on:
   pull_request:
 
 jobs:
-  shell-validation:
+  linux-validation:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            command: |
+              sudo apt-get update
+              sudo apt-get install -y shellcheck dash jq
+              shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh
+              dash tests/run-posix-suite.sh dash
+          - name: debian
+            command: |
+              docker run --rm -v "$PWD:/repo" -w /repo debian:stable-slim sh -c 'apt-get update && apt-get install -y shellcheck dash jq && shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh && dash tests/run-posix-suite.sh dash'
+          - name: alpine
+            command: |
+              docker run --rm -v "$PWD:/repo" -w /repo alpine:3.20 sh -c 'apk add --no-cache shellcheck dash jq && shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh && dash tests/run-posix-suite.sh dash'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install shellcheck
+      - name: Validate on ${{ matrix.name }}
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          ${{ matrix.command }}
+
+  macos-validation:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: brew install shellcheck jq
 
       - name: Lint scripts
         run: shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh
 
-      - name: Validate POSIX syntax
+      - name: Run POSIX smoke tests
         run: |
-          dash -n system-info.sh
-          dash -n install-system-info.sh
-          dash -n tests/test-system-info.sh
-          dash -n tests/test-installer.sh
-
-      - name: Smoke test scripts
-        run: |
-          dash tests/test-system-info.sh
-          dash tests/test-installer.sh
+          /bin/sh tests/run-posix-suite.sh /bin/sh

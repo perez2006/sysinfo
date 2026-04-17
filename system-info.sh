@@ -1,7 +1,11 @@
 #!/bin/sh
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 PROGRAM_NAME=${0##*/}
+PROC_DIR=${SYSINFO_PROC_DIR:-/proc}
+ETC_DIR=${SYSINFO_ETC_DIR:-/etc}
+DMI_DIR=${SYSINFO_DMI_DIR:-/sys/class/dmi/id}
+DOCKER_ENV_FILE=${SYSINFO_DOCKER_ENV_FILE:-/.dockerenv}
 
 COLOR_MODE="auto"
 OUTPUT_MODE="pretty"
@@ -281,7 +285,7 @@ get_environment() {
     dmi_product=""
     bios_vendor=""
 
-    [ -f /.dockerenv ] && {
+    [ -f "$DOCKER_ENV_FILE" ] && {
         printf '%s\n' "Docker"
         return
     }
@@ -297,17 +301,17 @@ get_environment() {
             ;;
     esac
 
-    if [ -f /proc/1/environ ] && grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
+    if [ -f "$PROC_DIR/1/environ" ] && grep -q "container=lxc" "$PROC_DIR/1/environ" 2>/dev/null; then
         printf '%s\n' "LXC"
         return
     fi
 
-    if [ -f /proc/1/cgroup ]; then
-        if grep -q "/lxc/" /proc/1/cgroup 2>/dev/null; then
+    if [ -f "$PROC_DIR/1/cgroup" ]; then
+        if grep -q "/lxc/" "$PROC_DIR/1/cgroup" 2>/dev/null; then
             printf '%s\n' "LXC"
             return
         fi
-        if grep -q "docker" /proc/1/cgroup 2>/dev/null; then
+        if grep -q "docker" "$PROC_DIR/1/cgroup" 2>/dev/null; then
             printf '%s\n' "Docker"
             return
         fi
@@ -332,9 +336,9 @@ get_environment() {
         esac
     fi
 
-    dmi_vendor=$(safe_cat /sys/class/dmi/id/sys_vendor)
-    dmi_product=$(safe_cat /sys/class/dmi/id/product_name)
-    bios_vendor=$(safe_cat /sys/class/dmi/id/bios_vendor)
+    dmi_vendor=$(safe_cat "$DMI_DIR/sys_vendor")
+    dmi_product=$(safe_cat "$DMI_DIR/product_name")
+    bios_vendor=$(safe_cat "$DMI_DIR/bios_vendor")
 
     case "$dmi_vendor $dmi_product $bios_vendor" in
         *QEMU*|*Bochs*)
@@ -363,12 +367,12 @@ get_environment() {
             ;;
     esac
 
-    if [ -f /proc/cpuinfo ] && grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null; then
+    if [ -f "$PROC_DIR/cpuinfo" ] && grep -q "^flags.*hypervisor" "$PROC_DIR/cpuinfo" 2>/dev/null; then
         printf '%s\n' "VM (Unknown)"
         return
     fi
 
-    if [ -d /proc/xen ]; then
+    if [ -d "$PROC_DIR/xen" ]; then
         printf '%s\n' "VM (Xen)"
         return
     fi
@@ -381,8 +385,8 @@ get_hostname() {
         hostname 2>/dev/null && return
     fi
 
-    safe_cat /proc/sys/kernel/hostname && return
-    safe_cat /etc/hostname && return
+    safe_cat "$PROC_DIR/sys/kernel/hostname" && return
+    safe_cat "$ETC_DIR/hostname" && return
 
     uname -n 2>/dev/null || printf '%s\n' "unknown"
 }
@@ -457,8 +461,8 @@ get_pkg_mgr() {
         return
     fi
 
-    if [ -f /etc/os-release ]; then
-        os_id=$(normalize_line "$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+    if [ -f "$ETC_DIR/os-release" ]; then
+        os_id=$(normalize_line "$(grep '^ID=' "$ETC_DIR/os-release" | cut -d= -f2 | tr -d '"')")
         case "$os_id" in
             ubuntu|debian|linuxmint|mint|kali|pop|elementary|zorin|mx|deepin|parrot|tails|raspbian|devuan)
                 printf '%s\n' "apt (expected)"
@@ -508,7 +512,7 @@ get_init_system() {
         return
     fi
 
-    pid1=$(safe_cat /proc/1/comm)
+    pid1=$(safe_cat "$PROC_DIR/1/comm")
 
     if [ "$pid1" = "systemd" ]; then
         printf '%s\n' "systemd"
@@ -546,22 +550,22 @@ get_init_system() {
 get_timezone() {
     timezone_value=""
 
-    timezone_value=$(normalize_line "$(safe_cat /etc/timezone)")
+    timezone_value=$(normalize_line "$(safe_cat "$ETC_DIR/timezone")")
     if [ -n "$timezone_value" ]; then
         printf '%s\n' "$timezone_value"
         return
     fi
 
-    if [ -f /etc/config/system ]; then
-        timezone_value=$(normalize_line "$(grep "option zonename" /etc/config/system 2>/dev/null | awk -F"'" '{print $2}')")
+    if [ -f "$ETC_DIR/config/system" ]; then
+        timezone_value=$(normalize_line "$(grep "option zonename" "$ETC_DIR/config/system" 2>/dev/null | awk -F"'" '{print $2}')")
         if [ -n "$timezone_value" ]; then
             printf '%s\n' "$timezone_value"
             return
         fi
     fi
 
-    if [ -L /etc/localtime ]; then
-        timezone_value=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+    if [ -L "$ETC_DIR/localtime" ]; then
+        timezone_value=$(readlink "$ETC_DIR/localtime" 2>/dev/null | sed 's|.*/zoneinfo/||')
         timezone_value=$(normalize_line "$timezone_value")
         if [ -n "$timezone_value" ]; then
             printf '%s\n' "$timezone_value"
@@ -684,8 +688,8 @@ get_public_ip() {
 }
 
 get_os_name() {
-    if [ -f /etc/os-release ]; then
-        normalize_line "$(grep '^NAME=' /etc/os-release | cut -d= -f2 | tr -d '"')"
+    if [ -f "$ETC_DIR/os-release" ]; then
+        normalize_line "$(grep '^NAME=' "$ETC_DIR/os-release" | cut -d= -f2 | tr -d '"')"
         return
     fi
 
@@ -706,14 +710,14 @@ get_os_version() {
     version_id=""
     pretty_name=""
 
-    if [ -f /etc/os-release ]; then
-        version_id=$(normalize_line "$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+    if [ -f "$ETC_DIR/os-release" ]; then
+        version_id=$(normalize_line "$(grep '^VERSION_ID=' "$ETC_DIR/os-release" | cut -d= -f2 | tr -d '"')")
         if [ -n "$version_id" ]; then
             printf '%s\n' "$version_id"
             return
         fi
 
-        pretty_name=$(normalize_line "$(grep '^VERSION=' /etc/os-release | cut -d= -f2 | tr -d '"')")
+        pretty_name=$(normalize_line "$(grep '^VERSION=' "$ETC_DIR/os-release" | cut -d= -f2 | tr -d '"')")
         if [ -n "$pretty_name" ]; then
             printf '%s\n' "$pretty_name"
             return
@@ -756,8 +760,8 @@ get_uptime() {
     minutes=0
     parts=""
 
-    if [ -r /proc/uptime ]; then
-        uptime_seconds=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+    if [ -r "$PROC_DIR/uptime" ]; then
+        uptime_seconds=$(awk '{print int($1)}' "$PROC_DIR/uptime" 2>/dev/null)
     elif command_exists uptime; then
         uptime_value=$(uptime 2>/dev/null | awk -F'up ' 'NF > 1 {print $2}' | awk -F',' '{print $1}')
         if [ -n "$uptime_value" ]; then
@@ -793,8 +797,8 @@ get_uptime() {
 get_cpu_info() {
     cpu_value=""
 
-    if [ -f /proc/cpuinfo ]; then
-        cpu_value=$(normalize_line "$(awk -F: '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)")
+    if [ -f "$PROC_DIR/cpuinfo" ]; then
+        cpu_value=$(normalize_line "$(awk -F: '/model name/ {print $2; exit}' "$PROC_DIR/cpuinfo" 2>/dev/null)")
         [ -n "$cpu_value" ] && {
             printf '%s\n' "$cpu_value"
             return
@@ -818,10 +822,10 @@ get_memory_info() {
     used_mb=0
     total_mb=0
 
-    if [ -f /proc/meminfo ]; then
-        total_kb=$(awk '/MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
-        available_kb=$(awk '/MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
-        [ -z "$available_kb" ] && available_kb=$(awk '/MemFree:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+    if [ -f "$PROC_DIR/meminfo" ]; then
+        total_kb=$(awk '/MemTotal:/ {print $2; exit}' "$PROC_DIR/meminfo" 2>/dev/null)
+        available_kb=$(awk '/MemAvailable:/ {print $2; exit}' "$PROC_DIR/meminfo" 2>/dev/null)
+        [ -z "$available_kb" ] && available_kb=$(awk '/MemFree:/ {print $2; exit}' "$PROC_DIR/meminfo" 2>/dev/null)
 
         case "$total_kb" in
             ''|*[!0-9]*)

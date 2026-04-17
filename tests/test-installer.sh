@@ -32,7 +32,7 @@ assert_contains() {
 trap cleanup EXIT HUP INT TERM
 
 version=$(sh "$SCRIPT" --version) || fail "version command failed"
-[ "$version" = "1.4.0" ] || fail "unexpected version: $version"
+[ "$version" = "1.5.0" ] || fail "unexpected version: $version"
 
 help_output=$(sh "$SCRIPT" --help) || fail "help command failed"
 assert_contains "$help_output" "--command-tool"
@@ -63,7 +63,7 @@ installed_script=$test_home/.local/bin/sysinfo
 [ -x "$installed_script" ] || fail "installed sysinfo is not executable"
 
 installed_version=$(sh "$installed_script" --version) || fail "installed sysinfo version failed"
-[ "$installed_version" = "1.4.0" ] || fail "unexpected installed version: $installed_version"
+[ "$installed_version" = "1.5.0" ] || fail "unexpected installed version: $installed_version"
 
 HOME=$test_home sh "$SCRIPT" --uninstall --user >"$out_file" 2>"$err_file" || {
     combined_output=$(cat "$out_file" "$err_file")
