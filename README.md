@@ -2,7 +2,7 @@
 
 `sysinfo` is a small POSIX `sh` script that prints a compact system summary for terminals and login shells.
 
-Current release: `v1.5.1`
+Current release: `v1.5.2`
 
 ## What It Shows
 
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-syst
 ### Install a specific version or tag
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.5.1
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.5.2
 ```
 
 ### Enable auto-start on login
@@ -132,6 +132,12 @@ This repository includes a GitHub Actions workflow that runs syntax checks, `she
 Release checksums are tracked in `checksums/`. To verify a downloaded release file, compare it with the matching `vX.Y.Z.sha256` file.
 
 ## Release Notes
+
+### v1.5.2
+
+- Simplifies the GitHub Actions workflow into explicit Ubuntu, container, and macOS jobs.
+- Keeps matrix job names short and readable so failures produce usable job logs.
+- Refreshes release checksums after the version bump.
 
 ### v1.5.1
 

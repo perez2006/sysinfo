@@ -2,7 +2,7 @@
 
 set -u
 
-checksum_file=${1:-checksums/v1.5.1.sha256}
+checksum_file=${1:-checksums/v1.5.2.sha256}
 
 fail() {
     printf 'verify-checksums: %s\n' "$1" >&2

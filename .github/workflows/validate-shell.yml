@@ -5,33 +5,45 @@ on:
   pull_request:
 
 jobs:
-  linux-validation:
+  ubuntu-validation:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ubuntu
-            command: |
-              sudo apt-get update
-              sudo apt-get install -y shellcheck dash jq
-              shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh
-              dash tests/run-posix-suite.sh dash
-          - name: debian
-            command: |
-              docker run --rm -v "$PWD:/repo" -w /repo debian:stable-slim sh -c 'apt-get update && apt-get install -y shellcheck dash jq && shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh && dash tests/run-posix-suite.sh dash'
-          - name: alpine
-            command: |
-              docker run --rm -v "$PWD:/repo" -w /repo alpine:3.20 sh -c 'apk add --no-cache shellcheck dash jq && shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh && dash tests/run-posix-suite.sh dash'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Validate on ${{ matrix.name }}
-        shell: bash
+      - name: Install validation tools
         run: |
-          ${{ matrix.command }}
+          sudo apt-get update
+          sudo apt-get install -y shellcheck dash jq
+
+      - name: Lint scripts
+        run: shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh
+
+      - name: Run POSIX smoke tests
+        run: dash tests/run-posix-suite.sh dash
+
+  container-validation:
+    runs-on: ubuntu-latest
+    name: container-validation (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian
+            image: debian:stable-slim
+            setup: apt-get update && apt-get install -y shellcheck dash jq
+          - name: alpine
+            image: alpine:3.20
+            setup: apk add --no-cache shellcheck dash jq
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate in ${{ matrix.name }}
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "${{ matrix.image }}" sh -c '${{ matrix.setup }} && shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh && dash tests/run-posix-suite.sh dash'
 
   macos-validation:
     runs-on: macos-latest

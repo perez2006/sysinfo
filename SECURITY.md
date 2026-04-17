@@ -7,10 +7,10 @@ The quick install command uses the common `curl | sh` pattern. For higher-assura
 Example:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/perez2006/sysinfo/v1.5.1/install-system-info.sh
-curl -fsSLO https://raw.githubusercontent.com/perez2006/sysinfo/main/checksums/v1.5.1.sha256
-sha256sum -c v1.5.1.sha256
-sh install-system-info.sh --command-tool --ref v1.5.1
+curl -fsSLO https://raw.githubusercontent.com/perez2006/sysinfo/v1.5.2/install-system-info.sh
+curl -fsSLO https://raw.githubusercontent.com/perez2006/sysinfo/main/checksums/v1.5.2.sha256
+sha256sum -c v1.5.2.sha256
+sh install-system-info.sh --command-tool --ref v1.5.2
 ```
 
 ## Reporting Issues
