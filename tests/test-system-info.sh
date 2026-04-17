@@ -30,7 +30,7 @@ assert_contains() {
 trap cleanup EXIT HUP INT TERM
 
 version=$(sh "$SCRIPT" --version) || fail "version command failed"
-[ "$version" = "1.5.0" ] || fail "unexpected version: $version"
+[ "$version" = "1.5.1" ] || fail "unexpected version: $version"
 
 plain_output=$(sh "$SCRIPT" --plain --no-public-ip --resources) || fail "plain output failed"
 assert_contains "$plain_output" "Public IP: disabled"

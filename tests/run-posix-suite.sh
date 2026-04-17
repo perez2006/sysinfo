@@ -9,7 +9,9 @@ SHELL_BIN=${1:-sh}
 "$SHELL_BIN" -n tests/test-system-info.sh
 "$SHELL_BIN" -n tests/test-installer.sh
 "$SHELL_BIN" -n tests/test-fixtures.sh
+"$SHELL_BIN" -n tests/verify-checksums.sh
 
 "$SHELL_BIN" tests/test-system-info.sh
 "$SHELL_BIN" tests/test-installer.sh
 "$SHELL_BIN" tests/test-fixtures.sh
+"$SHELL_BIN" tests/verify-checksums.sh

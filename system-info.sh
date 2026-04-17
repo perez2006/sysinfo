@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION="1.5.0"
+VERSION="1.5.1"
 PROGRAM_NAME=${0##*/}
 PROC_DIR=${SYSINFO_PROC_DIR:-/proc}
 ETC_DIR=${SYSINFO_ETC_DIR:-/etc}
