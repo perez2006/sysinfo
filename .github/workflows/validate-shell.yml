@@ -18,9 +18,16 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Lint scripts
-        run: shellcheck -s sh system-info.sh install-system-info.sh
+        run: shellcheck -s sh system-info.sh install-system-info.sh tests/*.sh
 
       - name: Validate POSIX syntax
         run: |
           dash -n system-info.sh
           dash -n install-system-info.sh
+          dash -n tests/test-system-info.sh
+          dash -n tests/test-installer.sh
+
+      - name: Smoke test scripts
+        run: |
+          dash tests/test-system-info.sh
+          dash tests/test-installer.sh

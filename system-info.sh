@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PROGRAM_NAME=${0##*/}
 
 COLOR_MODE="auto"
@@ -214,6 +214,10 @@ parse_args() {
             fail "timeout must be an integer"
             ;;
     esac
+
+    if [ "$REQUEST_TIMEOUT" -le 0 ]; then
+        fail "timeout must be greater than zero"
+    fi
 }
 
 should_render() {
@@ -240,12 +244,29 @@ http_get() {
     return 1
 }
 
+is_ipv4_address() {
+    printf '%s\n' "$1" | awk -F. '
+        NF != 4 { exit 1 }
+        {
+            for (i = 1; i <= 4; i += 1) {
+                if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) {
+                    exit 1
+                }
+            }
+        }
+    '
+}
+
 is_ip_address() {
     case "$1" in
         ''|*[!0-9A-Fa-f:.]*)
             return 1
             ;;
-        *:*|*.*.*.*)
+        *.*)
+            is_ipv4_address "$1"
+            return $?
+            ;;
+        *:*)
             return 0
             ;;
         *)
@@ -487,7 +508,14 @@ get_init_system() {
         return
     fi
 
-    if command_exists systemctl && probe_command systemctl --version; then
+    pid1=$(safe_cat /proc/1/comm)
+
+    if [ "$pid1" = "systemd" ]; then
+        printf '%s\n' "systemd"
+        return
+    fi
+
+    if command_exists systemctl && probe_command systemctl is-system-running; then
         printf '%s\n' "systemd"
         return
     fi
@@ -507,7 +535,6 @@ get_init_system() {
         return
     fi
 
-    pid1=$(safe_cat /proc/1/comm)
     case "$pid1" in
         systemd) printf '%s\n' "systemd" ;;
         *init) printf '%s\n' "sysvinit" ;;

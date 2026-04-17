@@ -1,6 +1,6 @@
 #!/bin/sh
 
-INSTALLER_VERSION="1.3.0"
+INSTALLER_VERSION="1.4.0"
 PROGRAM_NAME=${0##*/}
 
 REPO_OWNER="${SYSINFO_REPO_OWNER:-perez2006}"
@@ -83,7 +83,7 @@ show_help() {
         "  SYSINFO_REPO_OWNER" \
         "  SYSINFO_REPO_NAME" \
         "  SYSINFO_REPO_REF" \
-        "  SYSINFO_RAW_BASE_URL"
+        "  SYSINFO_RAW_BASE_URL  (URL or local directory)"
 }
 
 cleanup() {
@@ -100,6 +100,10 @@ make_temp_dir() {
 
 download_file() {
     output_file=$1
+
+    if [ -f "$SCRIPT_URL" ]; then
+        cp "$SCRIPT_URL" "$output_file" 2>/dev/null && return 0
+    fi
 
     if command_exists curl; then
         curl -fsSL "$SCRIPT_URL" -o "$output_file" 2>/dev/null && return 0

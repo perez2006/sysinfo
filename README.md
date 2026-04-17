@@ -2,7 +2,7 @@
 
 `sysinfo` is a small POSIX `sh` script that prints a compact system summary for terminals and login shells.
 
-Current release: `v1.3.0`
+Current release: `v1.4.0`
 
 ## What It Shows
 
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-syst
 ### Install a specific version or tag
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.3.0
+curl -fsSL https://raw.githubusercontent.com/perez2006/sysinfo/main/install-system-info.sh | sh -s -- --command-tool --ref v1.4.0
 ```
 
 ### Enable auto-start on login
@@ -125,4 +125,14 @@ When `sysinfo` is installed in `~/.local/bin`, the installer now prints an exact
 
 ## Validation
 
-This repository includes a GitHub Actions workflow that runs syntax checks and `shellcheck` on every push and pull request.
+This repository includes a GitHub Actions workflow that runs syntax checks, `shellcheck`, and the scripts in `tests/` on every push and pull request.
+
+## Release Notes
+
+### v1.4.0
+
+- Improves init system detection so `systemd` is not reported just because `systemctl` exists.
+- Tightens public IP validation for IPv4 responses.
+- Rejects `--timeout 0` so network lookups cannot accidentally run without a time limit.
+- Allows `SYSINFO_RAW_BASE_URL` to point at a local directory for offline installer testing.
+- Adds CI smoke tests for version, plain output, JSON output, resources mode, installer help, user install/uninstall, and non-interactive installer behavior.
